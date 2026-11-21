@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 33% 97%;
+    --foreground: 211 55% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 211 55% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 211 55% 14%;
+    --primary: 211 74% 17%;
+    --primary-foreground: 42 33% 98%;
+    --secondary: 41 30% 93%;
+    --secondary-foreground: 211 55% 18%;
+    --muted: 210 24% 95%;
+    --muted-foreground: 212 18% 38%;
+    --accent: 38 61% 45%;
+    --accent-foreground: 42 40% 98%;
+    --destructive: 0 64% 43%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 40 16% 85%;
+    --input: 40 16% 82%;
+    --ring: 38 61% 45%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply min-h-screen bg-background font-sans text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 8% 0%, rgba(184, 134, 45, 0.08), transparent 26rem),
+      radial-gradient(circle at 96% 18%, rgba(11, 43, 75, 0.06), transparent 30rem);
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: rgba(184, 134, 45, 0.25);
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 3px;
+  }
+}
+
+@layer components {
+  .skip-link {
+    @apply fixed left-4 top-4 z-[100] -translate-y-24 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-transform focus:translate-y-0;
+  }
+
+  .surface-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .eyebrow {
+    @apply text-xs font-bold uppercase tracking-[0.18em] text-gold-600;
+  }
+
+  .prose-measure {
+    max-width: 68ch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

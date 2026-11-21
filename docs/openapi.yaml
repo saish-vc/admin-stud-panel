@@ -1,0 +1,1352 @@
+openapi: 3.0.3
+info:
+  title: NTTF Certificate Portal API
+  version: 1.0.0
+  description: |
+    Student certificate requests, two-stage staff verification, PDF issuance,
+    public QR verification, and append-only auditing for NTTF.
+
+    Access tokens are short-lived bearer JWTs. Refresh tokens are rotating
+    `HttpOnly` cookies scoped to `/api/auth`. Role and account status are read
+    from PostgreSQL on every authenticated request.
+servers:
+  - url: /api
+    description: Same-origin API served through the reverse proxy
+tags:
+  - name: Authentication
+  - name: Student
+  - name: Administration
+  - name: Public verification
+  - name: Operations
+paths:
+  /auth/student/login:
+    post:
+      tags: [Authentication]
+      operationId: studentLogin
+      summary: Authenticate a student with roll number and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rollNumber, password]
+              properties:
+                rollNumber:
+                  type: string
+                  minLength: 4
+                  maxLength: 20
+                  pattern: '^[A-Za-z0-9-]+$'
+                  example: NTTF2026001
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+      responses:
+        '200':
+          description: Authenticated; sets the rotating refresh cookie
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: 'The nttf_refresh HttpOnly cookie scoped to /api/auth'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/admin/login:
+    post:
+      tags: [Authentication]
+      operationId: adminLogin
+      summary: Authenticate staff with e-mail and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 100
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+      responses:
+        '200':
+          description: Authenticated; sets the rotating refresh cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      operationId: refreshSession
+      summary: Rotate the refresh cookie and issue a new access token
+      security:
+        - refreshCookie: []
+      responses:
+        '200':
+          description: Rotated token pair
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Revoke the current refresh session and clear the cookie
+      security:
+        - refreshCookie: []
+      responses:
+        '204':
+          description: Session revoked or already absent
+  /auth/me:
+    get:
+      tags: [Authentication]
+      operationId: currentPrincipal
+      summary: Return the authenticated principal
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [user]
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/change-password:
+    post:
+      tags: [Authentication]
+      operationId: changePassword
+      summary: Change the current password and revoke other sessions
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                newPassword:
+                  type: string
+                  minLength: 10
+                  maxLength: 128
+                  description: At least 10 characters with upper and lower case, a digit, and a symbol.
+      responses:
+        '200':
+          description: Password changed; returns a fresh token pair
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /student/profile:
+    get:
+      tags: [Student]
+      operationId: studentProfile
+      summary: Read the student's own institutional master record
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Student master record
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /student/requests:
+    get:
+      tags: [Student]
+      operationId: listStudentRequests
+      summary: List the student's own requests, newest first
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Paginated request history with timelines
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequestList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Student]
+      operationId: createStudentRequest
+      summary: Submit a certificate request with an optional supporting document
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [certificateType, purpose]
+              properties:
+                certificateType:
+                  $ref: '#/components/schemas/CertificateType'
+                purpose:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+                document:
+                  type: string
+                  format: binary
+                  description: PDF, JPEG, or PNG up to 5 MB, validated by content signature.
+      responses:
+        '201':
+          description: Request created in `SUBMITTED`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequest'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /student/requests/{requestId}:
+    get:
+      tags: [Student]
+      operationId: getStudentRequest
+      summary: Read one of the student's own requests and its timeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Request detail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /student/requests/{requestId}/resubmit:
+    post:
+      tags: [Student]
+      operationId: resubmitStudentRequest
+      summary: Edit and resubmit a rejected request
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [purpose]
+              properties:
+                purpose:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+                document:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Request returned to `SUBMITTED`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentRequest'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /student/requests/{requestId}/document:
+    get:
+      tags: [Student]
+      operationId: downloadStudentDocument
+      summary: Stream the student's own supporting document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Document bytes
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /student/requests/{requestId}/certificate:
+    get:
+      tags: [Student]
+      operationId: downloadStudentCertificate
+      summary: Stream the issued certificate PDF when the request is `READY`
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Certificate PDF
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /student/requests/{requestId}/verification:
+    get:
+      tags: [Student]
+      operationId: getStudentVerification
+      summary: Read certificate number and public verification code
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Verification metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StudentVerification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /admin/stats:
+    get:
+      tags: [Administration]
+      operationId: adminStats
+      summary: Counts by status and total issued certificates
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Queue statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/requests:
+    get:
+      tags: [Administration]
+      operationId: listAdminRequests
+      summary: Paginated queue with status/type filters and roll/name search
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/RequestStatus'
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/CertificateType'
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+          description: Roll number or student-name fragment.
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Queue page; actionable requests first, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminQueueList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/requests/{requestId}:
+    get:
+      tags: [Administration]
+      operationId: getAdminRequest
+      summary: Full request detail including student record and timeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Request detail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /admin/requests/{requestId}/verify:
+    post:
+      tags: [Administration]
+      operationId: verifyDocuments
+      summary: Clerk verifies documents (SUBMITTED to UNDER_VERIFICATION)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                remarks:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Updated request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminRequest'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/requests/{requestId}/approve:
+    post:
+      tags: [Administration]
+      operationId: approveRequest
+      summary: HOD approves, generates the PDF, and records the certificate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                remarks:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Updated request and any generation warning
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/IssuanceResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/requests/{requestId}/reject:
+    post:
+      tags: [Administration]
+      operationId: rejectRequest
+      summary: HOD rejects a submitted or under-verification request
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [remarks]
+              properties:
+                remarks:
+                  type: string
+                  minLength: 3
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Updated request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AdminRequest'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/requests/{requestId}/generate:
+    post:
+      tags: [Administration]
+      operationId: retryCertificateGeneration
+      summary: Retry PDF generation for an approved request
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Updated request and any generation warning
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/IssuanceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /admin/requests/{requestId}/document:
+    get:
+      tags: [Administration]
+      operationId: downloadAdminDocument
+      summary: Stream a supporting document to authorised staff
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Document bytes
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /admin/requests/{requestId}/certificate:
+    get:
+      tags: [Administration]
+      operationId: downloadAdminCertificate
+      summary: Stream an issued certificate PDF to authorised staff
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Certificate PDF
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /verify/{code}:
+    get:
+      tags: [Public verification]
+      operationId: verifyCertificate
+      summary: Publicly verify a certificate by its QR verification code
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 64
+            pattern: '^[A-Za-z0-9_-]+$'
+      responses:
+        '200':
+          description: Minimal certificate projection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PublicVerification'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /health/liveness:
+    get:
+      tags: [Operations]
+      operationId: liveness
+      summary: Process liveness probe
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  service:
+                    type: string
+                    example: nttf-certificate-portal
+                  timestamp:
+                    type: string
+                    format: date-time
+  /health/readiness:
+    get:
+      tags: [Operations]
+      operationId: readiness
+      summary: Database readiness probe
+      security: []
+      responses:
+        '200':
+          description: PostgreSQL is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status:
+                    type: string
+                    enum: [ready]
+                  database:
+                    type: string
+                    enum: [ok]
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status:
+                    type: string
+                    enum: [unavailable]
+                  database:
+                    type: string
+                    enum: [unavailable]
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: nttf_refresh
+  parameters:
+    requestId:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 10000
+        default: 1
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+  responses:
+    ValidationError:
+      description: Malformed body, query, parameter, or upload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing, expired, or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Wrong role, wrong owner, forced password change, or inactive account
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Object missing or not visible to the caller; generic to prevent enumeration
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Invalid state transition or open-request limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PayloadTooLarge:
+      description: Upload or JSON body exceeds the configured limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: File type or content signature is not allow-listed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: FORBIDDEN
+            message:
+              type: string
+            details: {}
+            requestId:
+              type: string
+              nullable: true
+              description: Correlation identifier also returned in `X-Request-Id`.
+    Role:
+      type: string
+      enum: [STUDENT, CLERK, HOD, SUPER_ADMIN]
+    CertificateType:
+      type: string
+      enum: [BONAFIDE, LC, DIPLOMA]
+    RequestStatus:
+      type: string
+      enum: [SUBMITTED, UNDER_VERIFICATION, APPROVED, REJECTED, READY]
+    StudentStatus:
+      type: string
+      enum: [ACTIVE, GRADUATED, DROPPED]
+    AuditAction:
+      type: string
+      enum: [SUBMITTED, VERIFIED_DOCS, APPROVED, REJECTED, GENERATED_PDF, GENERATION_FAILED]
+    User:
+      type: object
+      required: [id, role, name, email, mustChangePassword]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/Role'
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        mustChangePassword:
+          type: boolean
+        rollNumber:
+          type: string
+        programme:
+          type: string
+    LoginResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [accessToken, user]
+          properties:
+            accessToken:
+              type: string
+              description: Short-lived bearer JWT.
+            user:
+              $ref: '#/components/schemas/User'
+    StudentProfile:
+      type: object
+      required:
+        - studentId
+        - rollNumber
+        - fullName
+        - dateOfBirth
+        - email
+        - programme
+        - batchYear
+        - currentSemester
+        - status
+        - createdAt
+      properties:
+        studentId:
+          type: string
+          format: uuid
+        rollNumber:
+          type: string
+        fullName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          nullable: true
+        programme:
+          type: string
+        batchYear:
+          type: integer
+        currentSemester:
+          type: integer
+          nullable: true
+        status:
+          $ref: '#/components/schemas/StudentStatus'
+        createdAt:
+          type: string
+          format: date-time
+    TimelineEntry:
+      type: object
+      required:
+        - logId
+        - action
+        - fromStatus
+        - statusAfter
+        - actorRole
+        - actorName
+        - remarks
+        - timestamp
+      properties:
+        logId:
+          type: integer
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        fromStatus:
+          type: string
+          enum: [SUBMITTED, UNDER_VERIFICATION, APPROVED, REJECTED, READY]
+          nullable: true
+        statusAfter:
+          $ref: '#/components/schemas/RequestStatus'
+        actorRole:
+          $ref: '#/components/schemas/Role'
+        actorName:
+          type: string
+        remarks:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+        timestamp:
+          type: string
+          format: date-time
+    StudentCertificate:
+      type: object
+      required: [certificateNumber, verificationCode, generatedAt, downloadUrl]
+      properties:
+        certificateNumber:
+          type: string
+          example: NTTF/BONAFIDE/2026/8F3A21
+        verificationCode:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        downloadUrl:
+          type: string
+          example: /api/student/requests/7b2f.../certificate
+    StudentRequest:
+      type: object
+      required:
+        - requestId
+        - certificateType
+        - purpose
+        - status
+        - adminRemarks
+        - supportingDocument
+        - verifiedAt
+        - createdAt
+        - certificate
+        - timeline
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        certificateType:
+          $ref: '#/components/schemas/CertificateType'
+        purpose:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        adminRemarks:
+          type: string
+          nullable: true
+        supportingDocument:
+          type: boolean
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        certificate:
+          allOf:
+            - $ref: '#/components/schemas/StudentCertificate'
+          nullable: true
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+    StudentRequestList:
+      type: object
+      required: [items, page, limit, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentRequest'
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+    StudentVerification:
+      type: object
+      required: [certificateNumber, verificationCode, verificationPath, generatedAt, status]
+      properties:
+        certificateNumber:
+          type: string
+        verificationCode:
+          type: string
+        verificationPath:
+          type: string
+          example: /verify/NTTF-8F3A21
+        generatedAt:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+    AdminStudent:
+      type: object
+      required:
+        - studentId
+        - rollNumber
+        - fullName
+        - dateOfBirth
+        - email
+        - phone
+        - programme
+        - batchYear
+        - currentSemester
+        - status
+      properties:
+        studentId:
+          type: string
+          format: uuid
+        rollNumber:
+          type: string
+        fullName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          nullable: true
+        programme:
+          type: string
+        batchYear:
+          type: integer
+        currentSemester:
+          type: integer
+          nullable: true
+        status:
+          $ref: '#/components/schemas/StudentStatus'
+    AdminCertificate:
+      type: object
+      required: [certificateNumber, verificationCode, verificationPath, generatedAt, sha256]
+      properties:
+        certificateNumber:
+          type: string
+        verificationCode:
+          type: string
+        verificationPath:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+    AdminRequest:
+      type: object
+      required:
+        - requestId
+        - certificateType
+        - purpose
+        - status
+        - adminRemarks
+        - supportingDocument
+        - verifiedAt
+        - createdAt
+        - student
+        - certificate
+        - timeline
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        certificateType:
+          $ref: '#/components/schemas/CertificateType'
+        purpose:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        adminRemarks:
+          type: string
+          nullable: true
+        supportingDocument:
+          type: boolean
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        student:
+          $ref: '#/components/schemas/AdminStudent'
+        certificate:
+          allOf:
+            - $ref: '#/components/schemas/AdminCertificate'
+          nullable: true
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+    AdminQueueItem:
+      type: object
+      required:
+        - requestId
+        - rollNumber
+        - studentName
+        - programme
+        - batchYear
+        - certificateType
+        - status
+        - purpose
+        - hasSupportingDocument
+        - createdAt
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        rollNumber:
+          type: string
+        studentName:
+          type: string
+        programme:
+          type: string
+        batchYear:
+          type: integer
+        certificateType:
+          $ref: '#/components/schemas/CertificateType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        purpose:
+          type: string
+        hasSupportingDocument:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    AdminQueueList:
+      type: object
+      required: [items, page, limit, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminQueueItem'
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+    AdminStats:
+      type: object
+      required: [byStatus, totalRequests, totalIssued, awaitingVerification, awaitingApproval]
+      properties:
+        byStatus:
+          type: object
+          required: [SUBMITTED, UNDER_VERIFICATION, APPROVED, REJECTED, READY]
+          properties:
+            SUBMITTED:
+              type: integer
+            UNDER_VERIFICATION:
+              type: integer
+            APPROVED:
+              type: integer
+            REJECTED:
+              type: integer
+            READY:
+              type: integer
+        totalRequests:
+          type: integer
+        totalIssued:
+          type: integer
+        awaitingVerification:
+          type: integer
+        awaitingApproval:
+          type: integer
+    IssuanceResponse:
+      type: object
+      required: [request, generationWarning]
+      properties:
+        request:
+          $ref: '#/components/schemas/AdminRequest'
+        generationWarning:
+          type: string
+          nullable: true
+          description: Present when approval succeeded but PDF generation must be retried.
+    PublicVerification:
+      type: object
+      required:
+        - valid
+        - certificateNumber
+        - certificateType
+        - holderName
+        - rollNumber
+        - programme
+        - issuedAt
+      properties:
+        valid:
+          type: boolean
+          enum: [true]
+        certificateNumber:
+          type: string
+        certificateType:
+          $ref: '#/components/schemas/CertificateType'
+        holderName:
+          type: string
+        rollNumber:
+          type: string
+        programme:
+          type: string
+        issuedAt:
+          type: string
+          format: date-time

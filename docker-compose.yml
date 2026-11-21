@@ -1,0 +1,25 @@
+name: nttf-certificate-portal
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: nttf-portal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nttf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: nttf_portal
+    ports:
+      - '5433:5432'
+    volumes:
+      - nttf_pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/10-init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nttf -d nttf_portal']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  nttf_pgdata:

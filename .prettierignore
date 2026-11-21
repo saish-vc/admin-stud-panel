@@ -1,0 +1,23 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+storage
+docs/architecture-diagram.html
+package-lock.json
+docs/openapi.yaml
+
+# Root-level manual verification artifacts (may contain session tokens)
+/login.json
+/admin-login.json
+/clerk-login.json
+/hod-login.json
+/approve.json
+/clerk-approve.json
+/approve-result.json
+/remarks.json
+/cookies*.txt
+/headers.txt
+
+docs/architecture-diagram.visual-check.*

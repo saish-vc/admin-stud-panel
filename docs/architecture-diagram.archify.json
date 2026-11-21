@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "NTTF Certificate Portal Architecture",
+    "locale": "en",
+    "output": "docs/architecture-diagram.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "request-path",
+        "label": "Authenticated request path",
+        "focus": ["spa", "proxy", "api", "auth", "workflow", "db"],
+        "note": "Every request passes TLS and CORS, then JWT verification and role checks before reaching workflow logic."
+      },
+      {
+        "id": "issuance",
+        "label": "Approval and issuance",
+        "focus": ["workflow", "pdf", "storageAdapter", "obj", "audit", "db"],
+        "note": "HOD approval renders the PDF, stores a private object, records the certificate, and audits the transition."
+      },
+      {
+        "id": "public-verify",
+        "label": "Public QR verification",
+        "focus": ["verifier", "proxy", "api", "db"],
+        "note": "The QR link is unauthenticated, rate limited, and returns only the minimum certificate fields."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "verifier",
+      "type": "external",
+      "label": "Public verifier",
+      "sublabel": "QR link · no login",
+      "pos": [250, 100],
+      "size": [150, 64]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "Auth + RBAC",
+      "sublabel": "JWT · rotating refresh",
+      "pos": [470, 100],
+      "size": [150, 64],
+      "tag": "bcrypt 12"
+    },
+    {
+      "id": "audit",
+      "type": "security",
+      "label": "Append-only audit",
+      "sublabel": "actor · action · timestamp",
+      "pos": [700, 100],
+      "size": [160, 64]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "React 19 SPA",
+      "sublabel": "Student · Admin · Verify",
+      "pos": [40, 300],
+      "size": [150, 72]
+    },
+    {
+      "id": "proxy",
+      "type": "cloud",
+      "label": "Nginx + TLS",
+      "sublabel": "Static SPA · /api proxy",
+      "pos": [250, 300],
+      "size": [150, 72]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Express 5 API",
+      "sublabel": "Node 22 · stateless",
+      "pos": [470, 300],
+      "size": [160, 72]
+    },
+    {
+      "id": "workflow",
+      "type": "backend",
+      "label": "Request workflow",
+      "sublabel": "state machine · row locks",
+      "pos": [700, 300],
+      "size": [170, 72]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "PostgreSQL 16",
+      "sublabel": "requests · sessions",
+      "pos": [930, 300],
+      "size": [150, 72],
+      "tag": "append-only trigger"
+    },
+    {
+      "id": "logs",
+      "type": "cloud",
+      "label": "Structured logs",
+      "sublabel": "pino JSON · requestId",
+      "pos": [250, 460],
+      "size": [150, 64]
+    },
+    {
+      "id": "pdf",
+      "type": "backend",
+      "label": "PDF + QR",
+      "sublabel": "pdfkit · retry ×3",
+      "pos": [700, 460],
+      "size": [170, 64]
+    },
+    {
+      "id": "storageAdapter",
+      "type": "backend",
+      "label": "Storage adapter",
+      "sublabel": "local disk / S3",
+      "pos": [930, 460],
+      "size": [160, 64]
+    },
+    {
+      "id": "obj",
+      "type": "cloud",
+      "label": "Private objects",
+      "sublabel": "documents · PDFs",
+      "pos": [1140, 460],
+      "size": [160, 64],
+      "tag": "UUID keys"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "JWT + role enforcement",
+      "wraps": ["auth", "api"]
+    },
+    {
+      "kind": "region",
+      "label": "Private object store",
+      "wraps": ["obj"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "verify-to-proxy",
+      "from": "verifier",
+      "to": "proxy",
+      "label": "public /verify",
+      "variant": "emphasis",
+      "labelAt": [325, 232]
+    },
+    { "id": "spa-to-proxy", "from": "spa", "to": "proxy", "label": "HTTPS" },
+    { "id": "proxy-to-api", "from": "proxy", "to": "api", "label": "SPA + /api" },
+    {
+      "id": "auth-to-api",
+      "from": "auth",
+      "to": "api",
+      "label": "verify every call",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "api-to-workflow",
+      "from": "api",
+      "to": "workflow",
+      "label": "student + staff routes",
+      "labelAt": [665, 250]
+    },
+    {
+      "id": "workflow-to-db",
+      "from": "workflow",
+      "to": "db",
+      "label": "SQL · FOR UPDATE",
+      "labelAt": [900, 250]
+    },
+    {
+      "id": "workflow-to-audit",
+      "from": "workflow",
+      "to": "audit",
+      "label": "every transition",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [785, 232]
+    },
+    {
+      "id": "workflow-to-pdf",
+      "from": "workflow",
+      "to": "pdf",
+      "label": "HOD approval",
+      "labelAt": [785, 416]
+    },
+    {
+      "id": "pdf-to-storage",
+      "from": "pdf",
+      "to": "storageAdapter",
+      "label": "store PDF",
+      "labelAt": [1000, 416]
+    },
+    {
+      "id": "storage-to-objects",
+      "from": "storageAdapter",
+      "to": "obj",
+      "label": "private write",
+      "labelAt": [1125, 416]
+    },
+    {
+      "id": "api-to-logs",
+      "from": "api",
+      "to": "logs",
+      "label": "JSON logs",
+      "variant": "dashed",
+      "labelAt": [360, 416]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Verification and issuance",
+      "items": [
+        "Clerk verifies documents; only HOD or SUPER_ADMIN approves or rejects",
+        "Approval renders a QR-bearing PDF and moves the request to READY"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Integrity and privacy",
+      "items": [
+        "Audit rows are insert-only via a PostgreSQL trigger",
+        "Public verification excludes email, phone, DOB, remarks, and file links"
+      ]
+    }
+  ]
+}
